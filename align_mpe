@@ -3,7 +3,6 @@ set -eu -o pipefail
 ################################
 # align_mpe
 # by Xin Wang 
-# Nov. 13, 2019
 #
 # Require one of the following:
 # 1) One or more pairs of
