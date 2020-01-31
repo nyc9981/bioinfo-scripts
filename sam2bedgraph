@@ -1,0 +1,71 @@
+#!/bin/bash
+
+#sam2bedgraph
+#by Xin Wang 
+#
+
+usage="Usage: $0 read.1.sam.file reference.genome.chr.size.file"
+#secondSam = false
+
+if [ $# != 2 ]; then
+	echo "Need 2 files as parameters!"
+	echo $usage
+	exit
+fi
+
+if ! [ -e $1 ]; then
+	echo "File $1 does not exist!"
+	echo $usage
+	exit
+fi
+
+if ! [ -e $2 ]; then
+	echo "File $2 does not exist!"
+	echo $usage
+	exit
+fi
+
+#if [ $# > 1 ]; then
+#    secondSam = true
+#    if ! [ -e $2 ]; then
+#	    echo "File $2 does not exist!"
+#	    echo $usage
+#	    exit
+#    fi
+#fi
+
+sam=$1
+chrSizes=$2
+
+# Derive 1st sai file name
+if [[ $sam =~ (.+)sam* ]]; then
+    bed="${BASH_REMATCH[1]}bed"
+    sortedBed="${BASH_REMATCH[1]}sorted.bed"
+    uniqueBed="${BASH_REMATCH[1]}sorted.unique.bed"
+    bedGraph="${BASH_REMATCH[1]}bedgraph"
+else
+    echo "unable to parse string $sam"
+    exit
+fi
+
+#if [ secondSam ]; then
+#   sam2 = $2
+#    cat $sam1 <(grep -v '^@' $sam2) > merged_sam.sam
+#fi
+
+
+
+# convert SAM to short BED 
+sam2ShortBed $sam $bed
+
+# sort BED by chr no and start pos
+bedSort $bed $sortedBed
+
+# delete duplicate alighments 
+awk '!seen[$0]++' $sortedBed > $uniqueBed
+
+# Use bedtools to calculate genome coverage of each position in file format of bedGraph
+bedtools genomecov -bg -i $uniqueBed -g $chrSizes >$bedGraph
+
+
+

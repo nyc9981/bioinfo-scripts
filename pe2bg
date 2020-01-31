@@ -1,0 +1,201 @@
+#!/bin/bash
+set -eu -o pipefail
+
+# set -euf -o pipefail 
+# -u: unused variable error out and exit
+# -f: no file name globbing (*, ?, etc)
+# -o pipefail : produce non-zero (error) exit code if any command in a pipeline fails
+
+# set our defaults for the options
+FLAG_BLACKLIST=0
+CUTOFF=600
+GENOME="mm10"
+
+# set help message
+usage="Usage: $0 [options] [outputFolder] Read1 Read2
+
+Optional argument: outputFolder (default: the folder where read files are located)
+Options: -b if set, filter blacklist genome regions
+         -c fragment size cutoff (default: 600)
+         -g genome assembly (default: mm10, supported are mm10|hg19|hg38|sacCer2|sacCer3)"
+
+# parse the options
+while getopts ':bc:g:h' opt ; do
+    case $opt in
+        b) FLAG_BLACKLIST=1 ;;
+        c) CUTOFF=$OPTARG ;;
+        g) GENOME=$OPTARG ;;
+        h) echo "$usage"; exit 0 ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            echo "$usage"; exit 1 ;;
+        :)
+            echo $"Option -$OPTARG requires an argument." >&2
+            echo "$usage"; exit 1 ;;
+    esac
+done
+
+# skip over the processed options
+# shift $((OPTIND-1)) can be unsafe. To prevent unwanted word-splitting etc, 
+# all parameter expansions should be double-quoted
+shift "$((OPTIND-1))" 
+
+case $GENOME in
+    mm10|hg19|hg38|sacCer2|sacCer3) 
+        Reference_Genome_Sequence_File=~/genome/$GENOME/$GENOME.fa
+        Reference_Genome_Chrom_Sizes_File=~/genome/$GENOME/$GENOME.chrom.sizes
+        ;;
+    *)
+        echo "The genome assembly $GENOME is invalid or not supported!"
+        echo "$usage"
+        exit 1
+        ;;
+esac
+
+#  Parse 2 or 3 positional parameters
+if [ $# -eq 2 ]; then
+    READ1="$1"
+    READ2="$2" 
+    OUTPUT_DIR=$(dirname "$READ1")  
+elif [ $# -eq 3 ]; then
+    OUTPUT_DIR="$1"
+    #mkdir -p $OUTPUT_DIR
+    READ1="$2"
+    READ2="$3" 
+else
+    echo "$usage"
+    exit 1
+fi
+
+# Check existence of folders and files
+if ! [ -d $OUTPUT_DIR ]; then
+    echo "The output folder $OUTPUT_DIR does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+if ! [ -e $READ1 ]; then
+    echo "The File $READ1 does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+if ! [ -e $READ2 ]; then
+    echo "The File $READ2 does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+
+if ! [ -e $Reference_Genome_Sequence_File ]; then
+    echo "The Reference Genome Sequence File $Reference_Genome_Sequence_File does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+if ! [ -e $Reference_Genome_Chrom_Sizes_File ]; then
+    echo "The Reference Genome Chrom Sizes File $Reference_Genome_Chrom_Sizes_File does not exist!"
+    echo  "$usage"
+    exit 1
+fi
+
+if [ $FLAG_BLACKLIST == 1 ]; then
+    Blacklist_Bed=~/genome/$GENOME/$GENOME.blacklist.bed
+    if ! [ -e $Blacklist_Bed ]; then   
+        echo "The bed file containing blacklist regions $Blacklist_Bed does not exist!"
+        echo "$usage"
+        exit 1
+    fi
+fi
+
+# sam and sam.gz files are/will be in the same dir as the fastq.gz files 
+samGzFile="${READ1%_R1_001.fastq.gz}.sam.gz"
+samFile="${READ1%_R1_001.fastq.gz}.sam"
+hasSamGzFile=false
+
+# check if compressed alignment file exists
+# if yes, unzip it then skip to creating the paired-end bed file
+if ! [ -e $samGzFile ]; then
+    echo $'\n\nCutting adaptors, cleaning the reads...............................\n'
+
+    # Cut adaptor, eliminate reads with length <= 17 (see cutcleanPE), then sync paired-end reads
+    # Create 2 fastq files
+    # cutcleanPE $read1 $read2 
+    minLen=17
+    cutclean1="${READ1%.fastq.gz}.cutclean.fastq.gz"
+    cutclean2="${READ2%.fastq.gz}.cutclean.fastq.gz"
+    
+    # Should use: -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+    cutadapt -a AGATCGGAAGAGC -A AGATCGGAAGAGC --minimum-length $minLen -o $cutclean1 -p $cutclean2 $READ1 $READ2
+
+    echo $'\nAligning...........................................................\n'
+    
+    sai1="${cutclean1%.fastq.gz}.sai"
+    sai2="${cutclean2%.fastq.gz}.sai"
+    
+    # Index only needs to be built once
+    # bwa index $genome (for short genomes)
+    # bwa index -a bwtsw $genome (for long genomes)
+    bwa aln $Reference_Genome_Sequence_File $cutclean1 >$sai1
+    bwa aln $Reference_Genome_Sequence_File $cutclean2 >$sai2
+    bwa sampe $Reference_Genome_Sequence_File $sai1 $sai2 $cutclean1 $cutclean2 >$samFile
+else
+    hasSamGzFile=true
+    echo $'\nDecompressing pre-existing sam.gz file..............................\n'
+    # keep the original file while decompressing it
+    gzip -k -d -f $samGzFile
+fi
+
+# Create names of output files 
+prefix="$(basename "${samFile%.sam}")"
+bedFile="$OUTPUT_DIR"/"${prefix}.bed"
+uniqueBed="$OUTPUT_DIR"/"${prefix}.unique.bed"
+bedGraph="$OUTPUT_DIR"/"${prefix}.bedgraph"
+normBedgraph="$OUTPUT_DIR"/"${prefix}.norm.bedgraph"
+
+echo $'\nCreating the paired-end bed file...................................\n'
+# convert SAM to short BED 
+sam2ShortBed $samFile $bedFile
+
+# sort BED by chr no and positions
+# delete duplicate alignments 
+# filter out large/mis-mapped hits according to $CUTOFF
+# filter out blacklisted regions if -b is set
+if [ $FLAG_BLACKLIST == 1 ]; then
+    sort -k1,1 -k2,2n -k3,3n $bedFile | \
+    uniq | \
+    awk -F"\t" -v var="$CUTOFF" '($3-$2) <= var' | \
+    bedtools intersect -a stdin -b $Blacklist_Bed -v > $uniqueBed
+else
+    sort -k1,1 -k2,2n -k3,3n $bedFile | \
+    uniq | \
+    awk -F"\t" -v var="$CUTOFF" '($3-$2) <= var' > $uniqueBed
+fi
+
+echo $'\nCreating the bedgraph file.........................................\n'
+# Use bedtools to calculate genome coverage of each position in file format of bedGraph
+bedtools genomecov -bg -i $uniqueBed -g $Reference_Genome_Chrom_Sizes_File >$bedGraph
+
+#normBedgraph="${samFile%.sam}.norm.bedgraph"
+
+# calculate the total coverage using the raw bedgraph file
+totalCoverage=$(awk -F'\t' '{sum+=($3-$2)*$4} END {print sum}' $bedGraph)
+
+# calculate the size of genome using its sequence file
+genomeSize=$(awk -F'\t' '{sum+=$2} END {print sum}'  $Reference_Genome_Chrom_Sizes_File)
+
+# normalize to coverage depth
+awk -v tc="$totalCoverage" -v gs="$genomeSize" '{$4/=(tc/gs)}1' $bedGraph > $normBedgraph
+
+echo $'\nFinalizing.........................................................\n'
+rm -f $bedFile
+gzip -f $uniqueBed
+
+if [[ "$hasSamGzFile" == true ]] ; then
+    rm -f $samFile
+else
+    rm -f $cutclean1 $cutclean2 $sai1 $sai2
+    gzip -f $samFile
+fi
+
+echo $'\nDone!..............................................................\n\n'

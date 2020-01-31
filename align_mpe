@@ -1,0 +1,157 @@
+#!/bin/bash
+set -eu -o pipefail
+################################
+# align_mpe
+# by Xin Wang 
+# Nov. 13, 2019
+#
+# Require one of the following:
+# 1) One or more pairs of
+#    paired-end reads in a folder
+# OR 
+# 2) One sam.gz file
+################################
+# set -euf -o pipefail 
+# -u: unused variable error out and exit
+# -f: no file name globbing (*, ?, etc)
+# -o pipefail : produce non-zero (error) exit code if any command in a pipeline fails
+
+# align all pairs of pair-end fastq files, and merge them into a single SAM file 
+
+
+# set our defaults for the options
+GENOME="mm10"
+
+# set help message
+usage="Usage: $0 [options] [outputFolder] inputFolder
+
+Required argument: inputFolder (absolute path of the folder where read files are located)
+Optional argument: outputFolder (default: inputFolder)
+Options: -g genome assembly (default: mm10, supported are mm10|hg19|hg38|sacCer2|sacCer3)"
+
+# parse the options
+while getopts ':g:h' opt ; do
+    case $opt in
+        g) GENOME=$OPTARG ;;
+        h) echo "$usage"; exit 0 ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            echo "$usage"; exit 1 ;;
+        :)
+            echo $"Option -$OPTARG requires an argument." >&2
+            echo "$usage"; exit 1 ;;
+  esac
+done
+
+# skip over the processed options
+# shift $((OPTIND-1)) can be unsafe. To prevent unwanted word-splitting etc, 
+# all parameter expansions should be double-quoted
+shift "$((OPTIND-1))" 
+
+case $GENOME in
+    mm10|hg19|hg38|sacCer2|sacCer3) 
+        Reference_Genome_Sequence_File=~/genome/$GENOME/$GENOME.fa
+        ;;
+    *)
+        echo "The genome assembly $GENOME is invalid or not supported!"
+        echo "$usage"
+        exit 1
+        ;;
+esac
+
+#  Parse 1 or 2 positional parameters
+if [ $# -eq 1 ]; then
+    INPUT_DIR="$1" 
+    OUTPUT_DIR="$1"
+elif [ $# -eq 2 ]; then
+    OUTPUT_DIR="$1"
+    INPUT_DIR="$2"
+else
+    echo "$usage"
+    exit 1
+fi
+
+# Check existence of folders and files
+if ! [ -d $OUTPUT_DIR ]; then
+    echo "The output folder $OUTPUT_DIR does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+if ! [ -d $INPUT_DIR ]; then
+    echo "The input folder $INPUT_DIRR does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+
+if ! [ -e $Reference_Genome_Sequence_File ]; then
+    echo "The Reference Genome Sequence File $Reference_Genome_Sequence_File does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+
+# allow empty arrays
+shopt -s nullglob
+samGzFiles=($INPUT_DIR/*.sam.gz)
+
+#echo "${samGzFiles[0]}"
+#echo ${#samGzFiles[@]}
+if ! [ ${#samGzFiles[@]} -eq 0 ]; then
+    echo "sam.gz file already exist!"
+    exit 1
+fi
+
+# set up names of output bam and sam files
+# will be deleted later
+outputBam="$INPUT_DIR"/"output.bam"
+prefix="$(basename $INPUT_DIR)"
+samFile="$OUTPUT_DIR"/"${prefix}.sam"
+ 
+# Find pairs fastq.gz files, assign them to read1 and read2
+r1FastqGzFiles=( $INPUT_DIR/*_R1_*.fastq.gz )
+#echo ${#r1FastqGzFiles[@]}
+
+for read1 in "${r1FastqGzFiles[@]}"; do
+    read2="${read1//R1/R2}"
+    bamFile="${read1%.fastq.gz}.bam"
+    minLen=17
+    cutclean1="${read1%.fastq.gz}.cutclean.fastq.gz"
+    cutclean2="${read2%.fastq.gz}.cutclean.fastq.gz"
+    
+    echo $'\n\nCutting adaptors, cleaning the reads...............................\n'
+    cutadapt -a AGATCGGAAGAGC -A AGATCGGAAGAGC --minimum-length $minLen -o $cutclean1 -p $cutclean2 $read1 $read2
+        
+    echo $'\nAligning...........................................................\n'
+    sai1="${cutclean1%.fastq.gz}.sai"
+    sai2="${cutclean2%.fastq.gz}.sai"
+
+    # Index only needs to be built once
+    # bwa index $genome (for short genomes)
+    # bwa index -a bwtsw $genome (for long genomes)
+    bwa aln $Reference_Genome_Sequence_File $cutclean1 >$sai1
+    bwa aln $Reference_Genome_Sequence_File $cutclean2 >$sai2
+    bwa sampe $Reference_Genome_Sequence_File $sai1 $sai2 $cutclean1 $cutclean2 | \
+    samtools view -S -b -h - >$bamFile
+    rm -f $cutclean1 $cutclean2 $sai1 $sai2  
+    # if 1 pair of fastq files, then the only bam file will be outputBam
+    if [ ${#r1FastqGzFiles[@]} -eq 1 ]; then
+        mv $bamFile $outputBam
+    fi  
+done
+
+if [ ${#r1FastqGzFiles[@]} -eq 1 ]; then
+    echo $'\nConverting........................................................\n'
+    samtools view -h $outputBam >$samFile
+    rm -f $outputBam
+else
+    echo $'\nMerging...........................................................\n'
+    samtools merge $outputBam $INPUT_DIR/*.bam
+    samtools view -h $outputBam >$samFile
+    #gzip -f $samFile
+    rm -f $outputBam
+    rm -f $INPUT_DIR/*.bam
+fi
+
+gzip -f $samFile

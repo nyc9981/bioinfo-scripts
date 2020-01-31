@@ -1,0 +1,58 @@
+#!/bin/bash
+set -eu -o pipefail
+#cutclean
+#by Xin Wang 
+#
+
+
+usage="Usage: $0 read.1.file.name read.2.file.name"
+
+if [ $# != 2 ]; then
+#if [ "$#" -ne 2 ]; then
+	echo "Need 2 files as parameters!"
+	echo $usage
+	exit 1
+fi
+
+if ! [ -e $1 ]; then
+	echo "File $1 does not exist!"
+	echo $usage
+	exit 1
+fi
+
+if ! [ -e $2 ]; then
+	echo "File $2 does not exist!"
+	echo $usage
+	exit 1
+fi
+
+read1=$1
+read2=$2
+
+if [[ $read1 =~ (.+)fastq* ]]; then 
+    cut1="${BASH_REMATCH[1]}Cut.fastq.gz"
+    cutclean1="${BASH_REMATCH[1]}cutclean.fastq.gz"
+else
+    echo "unable to parse string $read1"
+    exit
+fi
+
+if [[ $read2 =~ (.+)fastq* ]]; then
+    cut2="${BASH_REMATCH[1]}Cut.fastq.gz"
+    cutclean2="${BASH_REMATCH[1]}cutclean.fastq.gz"
+    #echo $cutclean2
+else
+    echo "unable to parse string $read2"
+    exit
+fi
+
+
+## Cut adaptor, eliminate reads with minimun length <=minLen, then sync paired-end reads
+## two tmp files are created then deleted
+
+minLen=17;
+
+
+# Should use: -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT 
+cutadapt -a AGATCGGAAGAGC -A AGATCGGAAGAGC --minimum-length $minLen -o $cutclean1 -p $cutclean2 $read1 $read2
+

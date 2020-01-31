@@ -1,0 +1,70 @@
+#!/usr/bin/perl -w
+#use strict;
+
+#sam2vplot.pl
+#by Xin Wang 
+#
+
+use strict;
+use File::Basename;
+
+my $prog = basename ($0);
+my ($infile, $outfile);
+
+if (@ARGV == 1) {
+   ($infile) = @ARGV;
+   $outfile = "$infile\_vplot";   
+}
+elsif (@ARGV == 2) {
+   ($infile, $outfile) = @ARGV;
+}
+else {
+    print "Extract data from Sam files into TAB-delimited text files\n";
+    print "$prog <in_file> <out_file>\n";
+    print " <in_file> : input SAM file\n";
+    print " <out_file> OPTIONAL: output file containing extracted data\n";
+    print "     if not provided: output file is named as input file name followed by _vplot\n";
+    exit (1);
+}
+
+open (FH_IN, "<$infile") || die "cannot open \"$infile\": $!";
+open (FH_OUT, ">$outfile") || die "cannot open \"$outfile\": $!";
+
+my ($line1, $line2);
+my (@v1, @v2);
+#my ($probe, $chrNo, $startPos, $endPos) = ("", 0, 0, 0);
+my ($chrNo, $startPos, $endPos, $size, $midpoint) = (0, 0, 0, 0, 0);
+
+while ($line1 = <FH_IN>) {     
+   chomp ($line1);
+   next if $line1 =~ /^@/;
+   $line2 = <FH_IN>;
+   chomp ($line2);
+   @v1 = split('\t', $line1);
+   
+   if ($v1[8] != 0) {
+     @v2 = split('\t', $line2);
+     if ( ($v1[8]+$v2[8]) == 0) { 
+      #$probe = $v1[0];
+      # deal with chr1 or chrI or chrmt ????
+      # change (\d+) to (.+) ???
+      # $chrNo = $1 if ($v1[2] =~ /^chr(\d+)$/);
+      $chrNo = $1 if ($v1[2] =~ /^chr(.+)$/);    
+      $startPos = ( $v1[3] <= $v2[3]) ? $v1[3] : $v2[3];
+      $size = abs( $v1[8] );
+      $endPos = $startPos + $size -1;
+      $midpoint = $startPos + int( $size / 2 );
+      # Filter out MAPQ = 0 reads
+      if ($v1[4] > 0 and $v2[4] > 0) {
+        print FH_OUT "$chrNo\t$startPos\t$endPos\t$size\t$midpoint\n";
+      }
+     } 
+   }   
+}
+
+close (FH_IN);
+close (FH_OUT);
+
+
+
+

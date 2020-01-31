@@ -1,0 +1,63 @@
+#!/usr/bin/perl -w
+#use strict;
+
+#
+#by Xin Wang 
+
+use strict;
+use File::Basename;
+
+my $prog = basename ($0);
+my ($infile, $outfile);
+
+if (@ARGV == 1) {
+   ($infile)=@ARGV;
+   $outfile = "$infile\.vplot";  # default output file name
+   # Derive midpt bedgraph file name if infile matches the following pattern
+   if ( $infile =~ /(.+sorted\.unique\.)bed/ ) {
+      $outfile = "$1vplot";
+   }
+}
+elsif (@ARGV == 2) {
+   ($infile, $outfile) = @ARGV;
+}
+else {
+    print "Extract data from Bed files into BedGraph files with first 3 cols\n";
+    print "$prog <in_file> <out_file>\n";
+    print " <in_file> : input Bed file\n";
+    print " <out_file> OPTIONAL: output file containing extracted data\n";
+    print "     if not provided: output file is named as input file name followed by .vplot\n";
+    exit (1);
+}
+
+open (FH_IN, "<$infile") || die "cannot open \"$infile\": $!";
+open (FH_OUT, ">$outfile") || die "cannot open \"$outfile\": $!";
+
+my $line;
+my @v;
+#my ($chrNo, $midPt, $next, $size) = ("", 0, 0, 0);
+my ($chrNo, $startPos, $endPos, $size, $midPt) = (0, 0, 0, 0, 0);
+while ($line = <FH_IN>) {     
+    chomp ($line);
+    next if $line =~ /^@/;
+
+    @v = split('\t', $line);
+
+    $chrNo = $v[0];
+    # probably does not work for circular DNAs
+	$size = $v[2] - $v[1];
+	$startPos = $v[1] + 1;
+	$endPos = $v[2];	
+	$midPt = $startPos + int ($size / 2);
+	#print FH_OUT "$chrNo\t$midPt\t$next\t$size\n";
+	#print FH_OUT "$chrNo\t$midPt\t$next\t$size\n";
+	print FH_OUT "$chrNo\t$startPos\t$endPos\t$size\t$midPt\n";
+		
+}
+
+close (FH_IN);
+close (FH_OUT);
+
+
+
+

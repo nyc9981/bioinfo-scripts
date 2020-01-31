@@ -1,0 +1,35 @@
+#!/bin/sh 
+
+usage="Usage: $0 sorted_unique_bed_file"
+
+
+if [ $# -gt 1 ]; then
+	echo $usage
+	exit
+fi
+
+if [ $# -lt 1 ]; then
+	echo $usage
+	exit
+fi
+
+if [ $# -eq 1 ]; then
+	
+	if ! [ -e $1 ]; then
+	    echo "File $1 does not exist!"
+	    echo $usage
+	    exit 
+    fi   
+fi
+
+input=$1
+
+# Derive 1st sai file name
+if [[ $input =~ (.+)bed ]]; then
+    output="${BASH_REMATCH[1]}size.bedgraph"
+    #echo $cutclean1
+else
+    output="$input.size.bedgraph"
+fi
+
+awk '{printf "%s\t%s\t%s\t%s\n",$1,$2,$3,$3-$2}' "$input" >"$output"

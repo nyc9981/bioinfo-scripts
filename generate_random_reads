@@ -1,0 +1,37 @@
+#!/usr/bin/env perl
+ 
+use strict;
+use warnings;
+ 
+my $usage = "Usage: $0 <infile.fa> <number> <length>\n";
+my $fasta = shift or die $usage;
+my $num = shift or die $usage;
+my $len = shift or die $usage;
+ 
+my $seq = '';
+open(IN,'<',$fasta) || die "Could not open $fasta: $!\n";
+while(<IN>){
+   chomp;
+   next if /^>/;
+   $seq .= $_;
+}
+close(IN);
+ 
+my $seq_len = length($seq);
+my $limit = $seq_len - $len + 1;
+ 
+if ($len > $seq_len){
+   die "Your read length is longer than the input sequence\n";
+}
+ 
+my $fake_qual = 'B' x $len;
+ 
+for (1 .. $num){
+   my $random_start = int(rand($limit));
+   my $substring = substr($seq,$random_start,$len);
+   print "\@$_\n$substring\n+\n$fake_qual\n";
+}
+ 
+exit(0);
+ 
+__END__

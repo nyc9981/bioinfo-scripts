@@ -1,0 +1,150 @@
+#!/bin/bash
+set -eu -o pipefail
+
+################################
+# readpair2featurecounts
+# by Xin Wang 
+#
+# Require ONE and only one pair 
+# of paired-end reads in a folder
+################################
+
+# default Reference_Genome_Sequence_File, will check for existence if being used
+Reference_Genome_Sequence_File=~/genome/hg19/hg19.fa
+Features_Bed_File=~/genome/hg19/hg19.2k.id.bed
+
+Frag_Size_Cutoff=2000
+
+usage="Usage: $0 [Reference_Genome_Sequence_File] [feature_bed_file]"
+
+if [ $# -gt 2 ]; then
+	echo $usage
+	exit 1
+fi
+
+if [ $# -eq 1 ]; then
+	echo $usage
+	exit 1
+fi
+
+if [ $# -eq 2 ]; then
+    Reference_Genome_Sequence_File=$1
+    Features_Bed_File=$2
+fi
+
+if ! [ -e $Reference_Genome_Sequence_File ]; then
+    echo "The Default Reference Genome Sequence File $Reference_Genome_Sequence_File does not exist!"
+    echo $usage
+    exit 1
+fi
+
+if ! [ -e $Features_Bed_File ]; then
+    echo "The Default Genomic Feature File $Features_Bed_File does not exist!"
+    echo $usage
+    exit 1
+fi
+
+# Find fastq.gz files, assign them to read1 and read2
+fastqGzFiles=( *.fastq.gz )
+
+# Make sure only two such files exist
+if ! [ ${#fastqGzFiles[@]} -eq 2 ]; then
+    echo "Require TWO (paired-end) fastq.gz files!"
+    exit 1
+fi
+
+read1=${fastqGzFiles[0]}
+read2=${fastqGzFiles[1]}
+
+samGzFile="${read1%_R1_001.fastq.gz}.sam.gz"
+samFile="${read1%_R1_001.fastq.gz}.sam"
+hasSamGzFile=false
+
+# check if compressed alignment file exists
+# if yes, unzip it then skip to creating the paired-end bed file
+if ! [ -e $samGzFile ]; then
+    echo $'\n\nCutting adaptors, cleaning the reads...............................\n'
+
+    # Cut adaptor, eliminate reads with length <= 17 (see cutcleanPE), then sync paired-end reads
+    # Create 2 fastq files
+    # cutcleanPE $read1 $read2 
+    minLen=17
+    cutclean1="${read1%.fastq.gz}.cutclean.fastq.gz"
+    cutclean2="${read2%.fastq.gz}.cutclean.fastq.gz"
+    
+    # Should use: -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+    cutadapt -a AGATCGGAAGAGC -A AGATCGGAAGAGC --minimum-length $minLen -o $cutclean1 -p $cutclean2 $read1 $read2
+
+    echo $'\nAligning...........................................................\n'
+    
+    sai1="${cutclean1%.fastq.gz}.sai"
+    sai2="${cutclean2%.fastq.gz}.sai"
+    
+    # Index only needs to be built once
+    # bwa index $genome (for short genomes)
+    # bwa index -a bwtsw $genome (for long genomes)
+    bwa aln $Reference_Genome_Sequence_File $cutclean1 >$sai1
+    bwa aln $Reference_Genome_Sequence_File $cutclean2 >$sai2
+    bwa sampe $Reference_Genome_Sequence_File $sai1 $sai2 $cutclean1 $cutclean2 >$samFile
+else
+    hasSamGzFile=true
+    echo $'\nDecompressing pre-existing sam.gz file..............................\n'
+    # keep the original file while decompressing it
+    gzip -k -d $samGzFile
+fi
+
+bedFile="${samFile%.sam}.bed"
+uniqueBed="${samFile%.sam}.unique.bed" 
+featureCountFile="${samFile%.sam}.count.bed"
+
+echo $'\nCreating the paired-end bed file...................................\n'
+
+# convert SAM to short BED 
+sam2ShortBed $samFile $bedFile
+
+# filter BED by size <= 2kb
+# sort BED by chr no and positions
+# delete duplicate alignments 
+awk -v var="$Frag_Size_Cutoff" '($3-$2)<=var' $bedFile | \
+sort -k1,1 -k2,2n -k3,3n | \
+uniq > $uniqueBed
+
+echo $'\nCounting...........................................................\n'
+
+# use bedtools to calculate # of fragments whose overlaps with each feature at lease 50%
+bedtools intersect  -a $Features_Bed_File \
+                    -b $uniqueBed \
+                    -c \
+                    -sorted -F 0.5 > $featureCountFile
+
+numUniqueHits=$(wc -l < $uniqueBed)
+#calculate the size of genome using its sequence file
+genomeSize=$(grep -v ">" $Reference_Genome_Sequence_File | wc | awk '{print $3-$1}')
+# echo $numUniqueHits $genomeSize
+
+tmpFile=$(mktemp)
+
+# use tha last column of the count file to calculate the normalized hit number
+# then paste it to the origin count file (a temp file has to be used).
+awk 'NF{print $NF}' $featureCountFile | \
+awk -v nh="$numUniqueHits" -v gs="$genomeSize" -v fsco="$Frag_Size_Cutoff" '{$1/=(nh/gs*fsco)}1' | \
+paste $featureCountFile - > $tmpFile
+
+cat $tmpFile > $featureCountFile
+rm -f $tmpFile
+
+# Use bedtools to calculate genome coverage of each position in file format of bedGraph
+# bedtools genomecov -bg -i $uniqueBed -g $chrSizes >$bedGraph
+
+echo $'\nFinalizing.........................................................\n'
+rm -f $bedFile
+gzip -f $uniqueBed
+
+if [[ "$hasSamGzFile" == true ]] ; then
+    rm -f $samFile
+else
+    rm -f $cutclean1 $cutclean2 $sai1 $sai2
+    gzip -f $samFile
+fi
+
+echo $'\nDone!..............................................................\n\n'

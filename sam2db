@@ -1,0 +1,71 @@
+#!/usr/bin/perl -w
+#use strict;
+
+#sam2db.pl
+#by Xin Wang 
+#
+
+use strict;
+use File::Basename;
+
+my $prog = basename ($0);
+my ($expt, $infile, $outfile);
+
+if (@ARGV == 2) {
+   ($expt, $infile) = @ARGV;
+   $outfile = "$infile\_db";   
+}
+elsif (@ARGV == 3) {
+   ($expt, $infile, $outfile) = @ARGV;
+}
+else {
+    print "Extract data from Sam files into TAB-delimited text files\n";
+    print "$prog <experiment_name> <in_file> <out_file>\n";
+    print " <experiment_name> : experiemnt name\n";
+    print " <in_file> : input SAM file\n";
+    print " <out_file> OPTIONAL: output file containing extracted data\n";
+    print "     if not provided: output file is named as input file name followed by _db\n";
+    exit (1);
+}
+
+open (FH_IN, "<$infile") || die "cannot open \"$infile\": $!";
+open (FH_OUT, ">$outfile") || die "cannot open \"$outfile\": $!";
+
+my ($line1, $line2);
+my (@v1, @v2);
+my ($probe, $chrNo, $startPos, $endPos) = ("", 0, 0, 0);
+
+while ($line1 = <FH_IN>) {     
+   chomp ($line1);
+   next if $line1 =~ /^@/;
+   $line2 = <FH_IN>;
+   chomp ($line2);
+   @v1 = split('\t', $line1);
+   
+   if ($v1[8] != 0) {
+     @v2 = split('\t', $line2);
+     if ( ($v1[8]+$v2[8]) == 0) { 
+      $probe = $v1[0];
+      # deal with chr1 or chrI or chrmt ????
+      # change (\d+) to (.+) ???
+      # $chrNo = $1 if ($v1[2] =~ /^chr(\d+)$/);
+      $chrNo = $1 if ($v1[2] =~ /^chr(.+)$/);
+      # probably does not work for circular DNAs    
+      $startPos = ( $v1[3] <= $v2[3]) ? $v1[3] : $v2[3];
+      $endPos = $startPos + abs( $v1[8] ) -1;
+      # Filter out MAPQ = 0 reads
+      # Added on 05/23/17
+      if ($v1[4] > 0 and $v2[4] > 0) {
+        print FH_OUT "$expt\t$probe\t$chrNo\t$startPos\t$endPos\n";
+      }
+      # print FH_OUT "$expt\t$probe\t$chrNo\t$startPos\t$endPos\n";
+     } 
+   }   
+}
+
+close (FH_IN);
+close (FH_OUT);
+
+
+
+

@@ -1,0 +1,78 @@
+#!/usr/bin/perl -w
+#use strict;
+
+#sam2bed.pl
+#by Xin Wang 
+#
+
+use strict;
+use File::Basename;
+
+my $prog = basename ($0);
+my ($infile, $outfile);
+
+if (@ARGV == 1) {
+   ($infile) = @ARGV;
+   $outfile = "$infile\.bed";   
+}
+elsif (@ARGV == 2) {
+   ($infile, $outfile) = @ARGV;
+}
+else {
+    print "Extract data from Sam files into Bed files with first 3 cols\n";
+    print "$prog <in_file> <out_file>\n";
+    print " <in_file> : input SAM file\n";
+    print " <out_file> OPTIONAL: output file containing extracted data\n";
+    print "     if not provided: output file is named as input file name followed by .bed\n";
+    exit (1);
+}
+
+open (FH_IN, "<$infile") || die "cannot open \"$infile\": $!";
+open (FH_OUT, ">$outfile") || die "cannot open \"$outfile\": $!";
+
+my ($line1, $line2);
+my (@v1, @v2);
+my ($chrNo, $startPos, $endPos) = ("", 0, 0);
+
+while ($line1 = <FH_IN>) {     
+   chomp ($line1);
+   next if $line1 =~ /^@/;
+   $line2 = <FH_IN>;
+   chomp ($line2);
+   @v1 = split('\t', $line1);
+   
+   if ($v1[8] != 0) {
+     @v2 = split('\t', $line2);
+     if ( ($v1[8]+$v2[8]) == 0) { 
+      #$probe = $v1[0];
+      # deal with chr1 or chrI or chrmt ????
+      # change (\d+) to (.+) ???
+      
+      #use just the chr number, eg. 1, 2, not M
+      # $chrNo = $1 if ($v1[2] =~ /^chr(\d+)$/);
+      #use chr name that starts with chr, eg. chr1, chr2, chrM, not 2micron
+      # $chrNo = $1 if ($v1[2] =~ /^chr(.+)$/); 
+      
+      #use the chr name: eg. chr1, chrM, 2micron etc
+      $chrNo = $v1[2];
+      # chr coordinates in BED file are 0 based half open and should be calculated by 
+      # converting 1 based coordinates in SAM file format
+      # probably does not work for circular DNAs
+      $startPos = ( $v1[3] <= $v2[3]) ? $v1[3]-1 : $v2[3]-1;
+      $endPos = $startPos + abs( $v1[8] );
+      print FH_OUT "$chrNo\t$startPos\t$endPos\n";
+      # Filter out MAPQ = 0 reads
+      # Added on 05/23/17, then commented out on Jan 4, 2019
+      #if ($v1[4] > 0 and $v2[4] > 0) {
+      #  print FH_OUT "$chrNo\t$startPos\t$endPos\n";
+      #}
+     } 
+   }   
+}
+
+close (FH_IN);
+close (FH_OUT);
+
+
+
+

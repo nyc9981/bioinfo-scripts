@@ -1,0 +1,77 @@
+#!/bin/bash
+set -eu -o pipefail
+#align2sam
+#by Xin Wang 
+#
+#
+
+usage="Usage: $0 read.1.file.name read.2.file.name reference.genome.file.name"
+
+if [ $# != 3 ]; then
+	echo "Need 3 files as parameters!"
+	echo $usage
+	exit 1
+fi
+
+if ! [ -e $1 ]; then
+	echo "File $1 does not exist!"
+	echo $usage
+	exit 1
+fi
+
+if ! [ -e $2 ]; then
+	echo "File $2 does not exist!"
+	echo $usage
+	exit 1
+fi
+
+if ! [ -e $3 ]; then
+	echo "Genome Sequence File $3 does not exist!"
+	echo $usage
+	exit 1
+fi
+
+cutclean1=$1
+cutclean2=$2
+genome=$3
+
+
+# Derive 1st sai file name
+if [[ $cutclean1 =~ (.+)fastq* ]]; then
+    sai1="${BASH_REMATCH[1]}sai"
+    #echo $cutclean1
+else
+    echo "unable to parse string $cutclean1"
+    exit
+fi
+
+# Derive 2nd sai file name
+if [[ $cutclean2 =~ (.+)fastq* ]]; then
+    sai2="${BASH_REMATCH[1]}sai"
+    #echo $cutclean2
+else
+    echo "unable to parse string $cutclean2"
+    exit
+fi
+
+# Derive the final sam file name
+if [[ $cutclean1 =~ (.+)_R1_001.cutclean.fastq* ]]; then
+    sam="${BASH_REMATCH[1]}.sam"
+    #echo $cutclean1
+else
+    echo "unable to parse string $cutclean1"
+    exit
+fi
+
+
+## Align a pair of the read files (cut and cleaned) individually 
+## Then make the sam file
+
+# Index only needs to be built once
+# bwa index $genome (for short genome)
+# bwa index -a bwtsw $genome (for long genome)
+bwa aln $genome $cutclean1 >$sai1
+bwa aln $genome $cutclean2 >$sai2
+bwa sampe $genome $sai1 $sai2 $cutclean1 $cutclean2 >$sam
+rm $sai1 $sai2
+

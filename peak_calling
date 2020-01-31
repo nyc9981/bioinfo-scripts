@@ -1,0 +1,140 @@
+#!/bin/bash
+set -euf -o pipefail
+# This will cause the script to exit/fail if any of the commands that are run 
+# within the script fail (ie. they return a non-zero exit code).
+
+# set -euf -o pipefail 
+# -u: unused variable error out and exit
+# -f: no file name globbing (*, ?, etc)
+# -o pipefail : produce non-zero (error) exit code if any command in a pipeline fails
+
+
+# set our defaults for the options
+THRESHOLD=2 # -t
+MIN_LENGTH=20 # -a 
+MAX_LENGTH=10000 # -z
+INTER_PEAK_DIST=1 # -d
+MERGE_CLOSE_PEAKS=1 # -k for keeping highest close peak; default: merge close peaks
+AUTO_PEAK_ID=0 # -i
+OUTPUT_IDENTIFIER="" # -o 
+#DELELE_OVERLAP_BED=""
+
+# set help message
+usage="Usage: $0 [options] [outputFolder] bedgraphFile
+
+Optional argument: outputFolder (default: the folder where the input bedgraph file is located)
+Options: -a minimum length of peaks (default: 20)
+         -d inter-peak distance cutoff (default: 1)
+         -i if set, generate peak ids in the output bed file
+         -k if set, keep the highest peak (not set: merge peaks closer than inter-peak distance cutoff)
+         -t threshold (default: 1)
+         -z maximum length of peaks (default: 10,000)
+         -h display this help message
+         "
+# parse the options
+while getopts ':a:d:iko:t:z:h' opt ; do
+    case $opt in
+        a) MIN_LENGTH=$OPTARG ;;
+        d) INTER_PEAK_DIST=$OPTARG ;;
+        i) AUTO_PEAK_ID=1 ;;
+        k) MERGE_CLOSE_PEAKS=0 ;;
+        o) OUTPUT_IDENTIFIER=$OPTARG ;;
+        t) THRESHOLD=$OPTARG ;;
+        z) MAX_LENGTH=$OPTARG ;;
+        h) echo "$usage"; exit 0 ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            echo "$usage"; exit 1 ;;
+        :)
+            echo $"Option -$OPTARG requires an argument." >&2
+            echo "$usage"; exit 1 ;;
+  esac
+done
+
+# skip over the processed options
+# shift $((OPTIND-1)) can be unsafe. To prevent unwanted word-splitting etc, 
+# all parameter expansions should be double-quoted
+shift "$((OPTIND-1))" 
+
+#  Parse 1 or 2 positional parameters
+if [ $# -eq 1 ]; then
+    BEDGRAPH="$1"
+    OUTPUT_DIR=$(dirname "$BEDGRAPH")  
+elif [ $# -eq 2 ]; then
+    OUTPUT_DIR="$1"
+    #mkdir -p $OUTPUT_DIR
+    BEDGRAPH="$2"
+else
+    echo "$usage"
+    exit 1
+fi
+
+# Check existence of folders and files
+if ! [ -d $OUTPUT_DIR ]; then
+    echo "The output folder $OUTPUT_DIR does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+if ! [ -e $BEDGRAPH ]; then
+    echo "The File $BEDGRAPH does not exist!"
+    echo "$usage"
+    exit 1
+fi
+
+
+# Create names of output files 
+# if OUTPUT_IDENTIFIER is provided, it will be inserted into the middle of the bed file name
+prefix="$(basename "${BEDGRAPH%.bedgraph}")"
+if [ $OUTPUT_IDENTIFIER ]; then
+    peakBedFile="$OUTPUT_DIR"/"${prefix}.${OUTPUT_IDENTIFIER}.peaks.bed"
+else
+    peakBedFile="$OUTPUT_DIR"/"${prefix}.peaks.bed"
+fi
+
+#retains intervals above threshold
+#merge adjacent above threshold regions and sum bedgraph scores (assumes bedgraph score in col 4)
+#filter based on length criteria
+#merge the bonafide peaks if they they are shorter than the inter peak distance and sum scores
+#sort
+    # BEGIN { FS=OFS="\t" }  
+if [ $MERGE_CLOSE_PEAKS == 1 ]; then
+    echo "Merging peaks that are closer than $INTER_PEAK_DIST bp."
+    awk -v var="$THRESHOLD" '$4 >= var' $BEDGRAPH | \
+    bedtools merge -d 0 -c 4 -o sum -i stdin | \
+    awk -v min_len="$MIN_LENGTH" -v max_len="$MAX_LENGTH"  '($3-$2)>=min_len && ($3-$2)<=max_len' |\
+    bedtools merge -d "$INTER_PEAK_DIST" -c 4 -o sum -i stdin |\
+    sort -k1,1 -k2,2n -k3,3n > $peakBedFile
+else
+    echo "'Keep the highest peak' feature: in beta !"
+    awk -v var="$THRESHOLD" '$4 >= var' $BEDGRAPH | \
+    bedtools merge -d 0 -c 4 -o sum -i stdin | \
+    awk -v min_len="$MIN_LENGTH" -v max_len="$MAX_LENGTH"  '($3-$2)>=min_len && ($3-$2)<=max_len' |\
+    awk -v var="$INTER_PEAK_DIST" '            
+    { 
+        if ( NR==1 ) { prev=$0; f1=$1; f3=$3; f4=$4 } 
+        else { 
+            if ( f1 != $1) {
+                print prev; prev=$0; f1=$1; f3=$3; f4=$4
+            }
+            else if ( ( f3 + var ) <= $2 ) {
+                print prev; prev=$0; f1=$1; f3=$3; f4=$4
+            }
+            else if ( f4 > $4 ) { 
+                print prev
+            }
+            else if ( f4 == $4 ) { 
+                print prev; prev=$0; f1=$1; f3=$3; f4=$4
+            }
+            else {
+                prev=$0; f1=$1; f3=$3; f4=$4
+            }
+        }
+    }
+    END { print $0 }'  |\
+    sort -k1,1 -k2,2n -k3,3n > $peakBedFile
+fi
+
+if [ $AUTO_PEAK_ID == 1 ]; then
+    awk 'BEGIN{OFS="\t";} {print $1, $2, $3, NR, $4}' $peakBedFile > tmp && mv tmp $peakBedFile
+fi
